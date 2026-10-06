@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Caminhos da Memória — Vargem Alta</title>
+  <meta name="description" content="Jogo educativo 3D/VR sobre a formação de Vargem Alta (ES): Puris, comunidade quilombola de Pedra Branca, imigração italiana e migração libanesa." />
+  <meta name="theme-color" content="#0b0907" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%230b0907'/><path d='M14 46 L28 22 L36 34 L42 26 L52 46 Z' fill='%23d9b26f'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <div id="loader"><div class="ld"><span>Caminhos da Memória</span><i></i></div></div>
+  <div id="fade"></div>
+  <div id="letterbox"><i></i><i></i></div>
+
+  <section id="menu" class="screen">
+    <header>
+      <div class="kicker">Vargem Alta · Espírito Santo</div>
+      <h1>Caminhos da Memória</h1>
+      <p class="sub">Quatro trajetórias na formação de um município capixaba</p>
+    </header>
+    <div id="cards"></div>
+    <footer>
+      <button id="btn-epi" class="ghost">Epílogo</button>
+      <button id="btn-src" class="ghost">Fontes e notas</button>
+      <button id="btn-snd" class="ghost">Música</button>
+      <button id="btn-voice" class="ghost">Narração por voz</button>
+      <button id="btn-vr" class="vr" disabled>VR indisponível neste navegador</button>
+    </footer>
+    <p class="hint">WASD/setas para andar · Shift corre · arraste para girar a câmera · E para conversar</p>
+  </section>
+
+  <div id="hud">
+    <div class="objective"><span id="chap-tag"></span><p><span id="obj-text"></span> <b id="obj-prog"></b></p></div>
+    <div class="compass"><div id="arrow"></div><span id="dist"></span></div>
+    <button id="btn-pause" aria-label="Pausa">❚❚</button>
+    <div id="prompt"></div>
+    <div id="toast"></div>
+    <div id="joy"><i></i></div>
+    <button id="act" aria-label="Interagir">✋</button>
+  </div>
+
+  <div id="dialog"><div id="who"></div><div id="txt"></div><div class="next">clique, E ou espaço ▸</div></div>
+
+  <section id="card" class="screen">
+    <div class="inner">
+      <div class="k"></div>
+      <h2></h2>
+      <div class="b"></div>
+      <div class="n"></div>
+      <div class="x"></div>
+      <div class="btns"></div>
+    </div>
+  </section>
+
+  <section id="pause" class="screen">
+    <div class="inner small">
+      <div class="k">Pausa</div>
+      <h2>Caminhos da Memória</h2>
+      <div class="btns col">
+        <button id="p-resume" class="primary">Continuar</button>
+        <button id="p-restart">Reiniciar capítulo</button>
+        <button id="p-menu">Voltar ao memorial</button>
+        <button class="t-music"></button>
+        <button class="t-voice"></button>
+      </div>
+    </div>
+  </section>
+
+  <script type="module" src="/main.js"></script>
+</body>
+</html>
