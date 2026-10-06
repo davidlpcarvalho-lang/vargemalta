@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { World, LOW, buildMemorial, collectible, textCanvas } from './world.js';
 import { Character } from './characters.js';
 import { CHAPTERS, EPILOGUE, SOURCES, NOTES, P, N } from './story.js';
@@ -11,7 +16,9 @@ import './style.css';
 // ---------- renderização ----------
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, LOW ? 1.25 : 2));
+const PR_MAX = Math.min(devicePixelRatio, LOW ? 1.25 : 2), PR_MIN = LOW ? 0.75 : 1;
+let pixelRatio = Math.min(PR_MAX, 1.5);
+renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -19,10 +26,52 @@ renderer.xr.enabled = true; renderer.xr.setReferenceSpaceType('local-floor');
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.08, 3000);
 const rig = new THREE.Group(); rig.add(camera); camera.position.set(0, 1.6, 6);
 const ui = new UI(), audio = new AudioEngine();
+
+// ---------- pós-processamento (somente na tela; no VR renderiza direto) ----------
+const POST = !LOW || /q=test/.test(location.search);
+let composer = null, renderPass = null;
+if (POST) {
+  const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: 4 });
+  composer = new EffectComposer(renderer, rt);
+  renderPass = new RenderPass(new THREE.Scene(), camera); composer.addPass(renderPass);
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.32, 0.55, 1.9));
+  composer.addPass(new OutputPass());
+  composer.addPass(new ShaderPass({
+    uniforms: { tDiffuse: { value: null } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+      void main(){ vec4 c = texture2D(tDiffuse, vUv); vec2 d = vUv - 0.5; c.rgb *= 1.0 - dot(d, d) * 0.62;
+        float l = dot(c.rgb, vec3(0.299, 0.587, 0.114)); c.rgb = mix(vec3(l), c.rgb, 1.1); c.rgb = mix(c.rgb, c.rgb * vec3(1.03, 1.0, 0.95), 0.6); gl_FragColor = c; }`
+  }));
+  composer.setPixelRatio(pixelRatio); composer.setSize(innerWidth, innerHeight);
+}
+function draw() {
+  if (composer && !renderer.xr.isPresenting) { renderPass.scene = active; renderPass.camera = camera; composer.render(); }
+  else renderer.render(active, camera);
+}
+// resolução dinâmica: mantém a fluidez ajustando a nitidez automaticamente
+const perf = { t: 0, n: 0, tier: 2, slow: 0 };
+function degrade() {
+  if (++perf.slow < 2) return; perf.slow = 0;
+  if (perf.tier === 2 && composer) { perf.tier = 1; composer = null; return; }        // 1) sem pós-processamento
+  if (perf.tier >= 1) { perf.tier = 0; const sh = world.sun.shadow; sh.mapSize.set(1024, 1024); sh.map?.dispose(); sh.map = null; } // 2) sombras mais leves
+}
+function adaptResolution(rawDt) {
+  if (renderer.xr.isPresenting || rawDt > 0.25) return;
+  perf.t += rawDt; perf.n++;
+  if (perf.t < 1.5) return;
+  const avg = perf.t / perf.n; perf.t = perf.n = 0;
+  let pr = pixelRatio;
+  if (avg > 1 / 45 && pr <= PR_MIN + 0.01) degrade(); // já no mínimo e ainda lento: baixa um nível de qualidade
+  const lo = perf.tier === 0 ? Math.min(PR_MIN, 0.85) : PR_MIN;
+  if (avg > 1 / 48) pr = Math.max(lo, pr - 0.15); else if (avg < 1 / 58) pr = Math.min(PR_MAX, pr + 0.1);
+  if (Math.abs(pr - pixelRatio) > 0.01) { pixelRatio = pr; renderer.setPixelRatio(pr); composer?.setPixelRatio(pr); }
+}
 const TOUCH = matchMedia('(pointer: coarse)').matches;
 const HERO_ORDER = ['youssef', 'bento', 'pietro', 'puri']; // ordem da imagem de referência
 const store = (() => { try { return JSON.parse(localStorage.getItem('cdm') || '{}'); } catch { return {}; } })();
-store.done ||= {}; store.music ??= true; store.voice ??= false;
+store.done ||= {}; store.music ??= true; store.voice ??= false; store.sound ??= true;
+audio.setMuted(!store.sound);
 const persist = () => { try { localStorage.setItem('cdm', JSON.stringify(store)); } catch { } };
 
 // ---------- memorial (menu) ----------
@@ -35,6 +84,9 @@ const menu = { scene: new THREE.Scene(), hover: -1 };
   const mem = buildMemorial(['youssef', 'bento', 'pietro', 'arue'], ['LIBANÊS', 'ESCRAVIZADO', 'ITALIANO', 'INDÍGENA']);
   mem.chars[0].hold('L', 'flag'); mem.chars[2].hold('L', 'suitcase'); mem.chars[3].hold('R', 'spear');
   s.add(mem.group); menu.mem = mem;
+  // caixas invisíveis para seleção (muito mais leve que testar cada triângulo)
+  const hb = new THREE.BoxGeometry(1.0, 2.1, 0.8).translate(0, 1.05, 0), hm = new THREE.MeshBasicMaterial({ visible: false });
+  menu.hit = mem.chars.map((c, i) => { const m = new THREE.Mesh(hb, hm); m.position.copy(c.root.position); m.userData.idx = i; mem.group.add(m); return m; });
   const key = new THREE.DirectionalLight('#ffe2bf', 1.6); key.position.set(-3, 7, 6); key.castShadow = true; key.shadow.mapSize.set(2048, 2048);
   Object.assign(key.shadow.camera, { left: -6, right: 6, top: 6, bottom: -2 }); key.shadow.bias = -0.0005; s.add(key);
   const rim = new THREE.DirectionalLight('#8fb0ff', 1.4); rim.position.set(2, 4, -6); s.add(rim);
@@ -80,7 +132,13 @@ function nameTag(text) {
 const S = { mode: 'menu', ch: null, beat: null, beatIdx: -1, npcs: {}, items: [], extras: [], player: null, pos: new THREE.Vector3(), yaw: 0, camYaw: 0, camPitch: 0.3, camDist: 6.2, lastDrag: -9, dq: null, near: null, follow: null, xr: false, vrYaw: 0, panelYaw: 0, t: 0, lookAt: new THREE.Vector3(), card: null };
 const input = { keys: {}, joy: { x: 0, y: 0 }, run: false };
 
-function disposeObj(o) { o.traverse(m => { if (m.isMesh) m.geometry.dispose(); }); o.parent?.remove(o); }
+function disposeObj(o) {
+  o.traverse(m => {
+    if ((m.isMesh || m.isSprite) && !m.geometry.userData.shared) m.geometry.dispose();
+    if (m.isSprite) { m.material.map?.dispose(); m.material.dispose(); }
+  });
+  o.parent?.remove(o);
+}
 function clearActors() {
   Object.values(S.npcs).forEach(n => disposeObj(n.c.root)); S.npcs = {};
   S.items.forEach(i => disposeObj(i.g)); S.items = [];
@@ -117,10 +175,11 @@ async function startChapter(id) {
   setScene(world.scene); ui.show('#hud', false);
   audio.setTheme(ch.music); audio.musicOn = store.music;
   S.mode = 'intro'; S.t0 = S.t; S.snap = true;
+  await precompile();
   showCard({ kicker: `${ch.intro.kicker} · ${ch.era}`, title: ch.intro.title, body: ch.intro.body, buttons: [['Começar', begin]] });
   await ui.fade(false);
 }
-function begin() { closeCard(); S.mode = 'play'; ui.show('#hud'); ui.el.tag.textContent = `Capítulo ${S.ch.num} · ${S.ch.name}`; startBeat(0); }
+function begin() { if (S.mode !== 'intro') return; closeCard(); S.mode = 'play'; ui.show('#hud'); ui.el.tag.textContent = `Capítulo ${S.ch.num} · ${S.ch.name}`; startBeat(0); }
 
 function startBeat(i) {
   S.beatIdx = i; const b = S.ch.beats[i];
@@ -135,6 +194,7 @@ function startBeat(i) {
     const g = new THREE.Group(), m = collectible(b.item); g.add(m);
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })); glow.scale.setScalar(1.6); g.add(glow);
     const y = world.walkHeight(x, z); g.position.set(x, y + 0.7, z); world.scene.add(g);
+    glow.material.userData.own = true;
     S.items.push({ g, m, glow, x, z, y, got: false, ph: Math.random() * 6, kind: b.item });
   });
   if (b.type === 'trail') S.follow = b.follow;
@@ -180,7 +240,7 @@ function act(list) {
         [['rosa', -3, 2], ['joao', 3, -3], ['benedita', -6, -2], ['tome', 1, 4]].forEach(([id, dx, dz]) => npcGo(id, qx + dx, qz + dz, 3));
         S.npcs.luzia.c.root.visible = true; S.npcs.luzia.def.hidden = false; break;
       }
-      case 'build': world.reveal(p1); if (p1 === 'house' && world.named.frame) world.named.frame.visible = false; break;
+      case 'build': world.reveal(p1); audio.build(); if (p1 === 'house' && world.named.frame) world.named.frame.visible = false; break;
       case 'jongo': {
         const [fx, fz] = P.fire; world.named.fire.off = false;
         ['tambor1', 'tambor2'].forEach(id => { S.npcs[id].c.root.visible = true; S.npcs[id].def.hidden = false; const n = S.npcs[id]; n.c.root.rotation.y = Math.atan2(fx - n.c.root.position.x, fz - n.c.root.position.z); });
@@ -194,7 +254,7 @@ function act(list) {
         world.setTownVisible(true); if (world.named.field) world.named.field.visible = true;
         if (world.named.tent) world.named.tent.visible = false;
         S.items.forEach(i => { if (i.kind === 'cova') disposeObj(i.g); }); S.items = S.items.filter(i => i.kind !== 'cova');
-        world.setTime('day', true); S.player.hold('L', null);
+        world.setTime('day', true); S.player.hold('L', null); setTimeout(() => audio.bell(audio.ctx?.currentTime ?? 0, 0.14), 900);
         S.npcs.tropeiro.c.root.visible = true; S.npcs.tropeiro.def.hidden = false;
         const p = S.npcs.papa; p.c.root.position.set(P.plat[0] + 0.3, world.walkHeight(P.plat[0] + 0.3, 6), 6);
         world.placeTrain(0.05); world.train.target = 0.05; world.train.g.visible = true;
@@ -210,11 +270,18 @@ function act(list) {
 // ---------- diálogos e cartões ----------
 const voices = () => (window.speechSynthesis?.getVoices() || []).filter(v => /pt[-_]BR/i.test(v.lang));
 function speak(text, who) {
-  if (!store.voice || !window.speechSynthesis) return;
+  if (!store.voice || !store.sound || !window.speechSynthesis) return;
   speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = 'pt-BR';
   const vs = voices(); if (vs.length) u.voice = vs[0]; u.rate = 1.03;
   u.pitch = who === N ? 0.92 : 1 + ((who.length * 7) % 5 - 2) * 0.07; speechSynthesis.speak(u);
 }
+const VOICE_PITCH = { 'Narração': 0 };
+ui.onType = () => {
+  if (!S.dq || (store.voice && store.sound)) return;
+  const who = S.dq.who; if (who === N) return;
+  const n = npcByName(who), L = n?.c.L || S.player?.L || {}, base = L.age === 'child' ? 560 : L.female ? 330 : L.age === 'elder' ? 175 : 205;
+  audio.murmur(base * (1 + ((who.length * 13) % 7) * 0.025));
+};
 function npcByName(name) { return Object.values(S.npcs).find(n => n.def.name === name); }
 function dialog(lines, npcId, done) {
   S.mode = 'dialog'; S.dq = { lines, i: 0, done, npc: npcId };
@@ -228,17 +295,21 @@ function showLine() {
   S.dq.who = who;
   if (S.xr) drawDialogVR(vrDialog, who, text, `Gatilho: continuar  (${S.dq.i + 1}/${S.dq.lines.length})`);
 }
+function endDialog() {
+  ui.closeDialog(); vrDialog.hide(); window.speechSynthesis?.cancel();
+  const d = S.dq.done; S.dq = null; S.mode = 'play'; d && d();
+}
 function advance() {
-  if (!S.dq) return;
+  if (S.mode !== 'dialog' || !S.dq) return;
+  const now = performance.now(); if (now - (S.dqT || 0) < 110) return; // ignora toques duplos acidentais (tempo real)
+  S.dqT = now;
   if (!S.xr && ui.skipType()) return;
   audio.ui(); S.dq.i++;
-  if (S.dq.i >= S.dq.lines.length) {
-    ui.closeDialog(); vrDialog.hide(); window.speechSynthesis?.cancel();
-    const d = S.dq.done; S.dq = null; S.mode = 'play'; d && d();
-  } else showLine();
+  if (S.dq.i >= S.dq.lines.length) endDialog(); else showLine();
 }
+function skipDialog() { if (S.mode === 'dialog' && S.dq) { audio.ui(); endDialog(); } }
 function showCard(c) {
-  S.card = c; ui.card(c);
+  S.card = c; ui.card(c); audio.whoosh();
   if (S.xr) drawCardVR(vrDialog, c, 'Gatilho: ' + c.buttons[0][0]);
 }
 function closeCard() { ui.closeCard(); vrDialog.hide(); S.card = null; }
@@ -279,9 +350,12 @@ async function startEpilogue() {
   S.pos.set(mx - 7, world.walkHeight(mx - 7, mz), mz); S.yaw = Math.PI / 2; S.vrYaw = S.yaw + Math.PI;
   setScene(world.scene); audio.setTheme('epilogue');
   S.mode = 'epilogue'; S.snap = true;
+  await precompile(); audio.bell(audio.ctx?.currentTime ?? 0, 0.1);
   showCard({ kicker: EPILOGUE.kicker, title: EPILOGUE.title, body: EPILOGUE.body, buttons: [['Voltar ao memorial', toMenu], ['Fontes e notas', showSources]] });
   await ui.fade(false);
 }
+// compila os shaders enquanto a tela está preta (evita engasgos ao começar)
+async function precompile() { try { await renderer.compileAsync(world.scene, camera); } catch { } }
 function sourcesHTML() { return `<ol class="src">${SOURCES.map(s => `<li>${s}</li>`).join('')}</ol>`; }
 function showSources() {
   const back = S.mode === 'menu' ? () => { closeCard(); ui.show('#menu'); } : () => showCard({ kicker: EPILOGUE.kicker, title: EPILOGUE.title, body: EPILOGUE.body, buttons: [['Voltar ao memorial', toMenu], ['Fontes e notas', showSources]] });
@@ -315,9 +389,12 @@ renderCards();
 document.getElementById('btn-epi').onclick = startEpilogue;
 document.getElementById('btn-src').onclick = showSources;
 const btnSnd = document.getElementById('btn-snd'), btnVoice = document.getElementById('btn-voice');
-const syncToggles = () => { btnSnd.textContent = 'Música: ' + (store.music ? 'ligada' : 'desligada'); btnVoice.textContent = 'Narração por voz: ' + (store.voice ? 'ligada' : 'desligada'); document.querySelectorAll('.t-music').forEach(e => e.textContent = btnSnd.textContent); document.querySelectorAll('.t-voice').forEach(e => e.textContent = btnVoice.textContent); };
+const btnSfx = document.getElementById('btn-sfx'), btnMute = document.getElementById('btn-mute');
+const syncToggles = () => { btnSfx.textContent = 'Som: ' + (store.sound ? 'ligado' : 'desligado'); btnMute.textContent = store.sound ? '🔊' : '🔇'; btnMute.setAttribute('aria-label', store.sound ? 'Desligar som' : 'Ligar som'); document.querySelectorAll('.t-sound').forEach(e => e.textContent = btnSfx.textContent); btnSnd.textContent = 'Música: ' + (store.music ? 'ligada' : 'desligada'); btnVoice.textContent = 'Narração por voz: ' + (store.voice ? 'ligada' : 'desligada'); document.querySelectorAll('.t-music').forEach(e => e.textContent = btnSnd.textContent); document.querySelectorAll('.t-voice').forEach(e => e.textContent = btnVoice.textContent); };
 const toggleMusic = () => { store.music = !store.music; audio.musicOn = store.music; persist(); syncToggles(); };
 const toggleVoice = () => { store.voice = !store.voice; if (!store.voice) window.speechSynthesis?.cancel(); persist(); syncToggles(); };
+const toggleSound = () => { store.sound = !store.sound; audio.init(); audio.setMuted(!store.sound); if (!store.sound) window.speechSynthesis?.cancel(); persist(); syncToggles(); };
+btnSfx.onclick = toggleSound; btnMute.onclick = toggleSound; document.querySelectorAll('.t-sound').forEach(e => e.onclick = toggleSound);
 btnSnd.onclick = toggleMusic; btnVoice.onclick = toggleVoice; syncToggles();
 document.querySelectorAll('.t-music').forEach(e => e.onclick = toggleMusic);
 document.querySelectorAll('.t-voice').forEach(e => e.onclick = toggleVoice);
@@ -363,11 +440,7 @@ renderer.xr.addEventListener('sessionend', () => {
 });
 const ray = new THREE.Raycaster(), tmpM = new THREE.Matrix4();
 function pointRay(c) { tmpM.identity().extractRotation(c.matrixWorld); ray.ray.origin.setFromMatrixPosition(c.matrixWorld); ray.ray.direction.set(0, 0, -1).applyMatrix4(tmpM); return ray; }
-function pickMemorial(r) {
-  const hits = r.intersectObjects(menu.mem.group.children, true);
-  for (const h of hits) { const ch = h.object.userData.char; if (ch) return menu.mem.chars.indexOf(ch); }
-  return -1;
-}
+function pickMemorial(r) { const h = r.intersectObjects(menu.hit, false)[0]; return h ? h.object.userData.idx : -1; }
 function onVRSelect(c) {
   audio.init();
   if (S.mode === 'menu') {
@@ -392,11 +465,18 @@ drawVRMenu(); vrTitle.mesh.visible = vrEpi.mesh.visible = false;
 // ---------- entrada (teclado, mouse, toque, gamepad) ----------
 addEventListener('keydown', e => {
   input.keys[e.code] = true;
-  if (e.code === 'Escape') { if (document.getElementById('card').classList.contains('on')) return; togglePause(); }
-  if (['KeyE', 'Space', 'Enter'].includes(e.code) && !e.repeat) {
-    if (document.activeElement?.tagName === 'BUTTON' && e.code !== 'KeyE') return;
-    if (S.mode === 'play' || S.mode === 'dialog') { e.preventDefault(); interact(); }
+  const act = ['KeyE', 'Space', 'Enter', 'NumpadEnter'].includes(e.code);
+  if (S.mode === 'dialog') {
+    if (act) { e.preventDefault(); if (!e.repeat) advance(); }
+    else if (e.code === 'Escape') { e.preventDefault(); skipDialog(); }
+    return;
   }
+  if (e.code === 'KeyM' && !e.repeat) { toggleSound(); return; }
+  if (e.code === 'Escape') { if (ui.el.card.classList.contains('on')) return; togglePause(); return; }
+  if (!act || e.repeat) return;
+  if (document.activeElement?.tagName === 'BUTTON' && e.code !== 'KeyE') return; // o próprio botão focado responde
+  if (S.mode === 'play') { e.preventDefault(); interact(); }
+  else if (S.card && ui.el.card.classList.contains('on')) { e.preventDefault(); ui.el.card.querySelector('.btns button')?.click(); }
 });
 addEventListener('keyup', e => { input.keys[e.code] = false; });
 let drag = null;
@@ -414,6 +494,8 @@ addEventListener('pointerup', e => {
   if (S.mode === 'menu' && menu.hover >= 0) startChapter(HERO_ORDER[menu.hover]);
   else if (S.mode === 'dialog') advance();
 });
+ui.el.dialog.addEventListener('click', e => { if (e.target.closest('#skip')) return; advance(); });
+document.getElementById('skip').addEventListener('click', e => { e.stopPropagation(); skipDialog(); });
 canvas.addEventListener('wheel', e => { S.camDist = Math.max(2.6, Math.min(14, S.camDist + e.deltaY * 0.004)); }, { passive: true });
 // joystick virtual
 if (TOUCH) {
@@ -516,7 +598,7 @@ function updatePlay(dt, mv) {
     if (it.got) continue;
     it.g.position.y = it.y + 0.7 + Math.sin(S.t * 2.5 + it.ph) * 0.12; it.m.rotation.y += dt * 1.2; it.glow.material.opacity = 0.6 + Math.sin(S.t * 4 + it.ph) * 0.25;
     if (S.mode === 'play' && Math.hypot(it.x - S.pos.x, it.z - S.pos.z) < 1.8) {
-      it.got = true; audio.collect();
+      it.got = true; if (it.kind === 'cova') audio.dig(); audio.collect();
       if (it.kind === 'cova') { it.glow.visible = false; it.g.position.y = it.y + 0.15; it.m.scale.setScalar(1.6); }
       else { it.g.visible = false; }
       updateObjective();
@@ -538,6 +620,7 @@ function updatePlay(dt, mv) {
   }
 }
 
+const occRay = new THREE.Raycaster(), camDir = new THREE.Vector3();
 function updateCamera(dt) {
   const k = 1 - Math.exp(-dt * 6);
   if (S.mode === 'intro') {
@@ -564,7 +647,18 @@ function updateCamera(dt) {
   }
   const f = v3.set(Math.sin(S.camYaw), 0, Math.cos(S.camYaw));
   const tgt = v3b.set(S.pos.x, S.pos.y + 1.55, S.pos.z);
-  const d = S.camDist, cp = new THREE.Vector3(tgt.x - f.x * d * Math.cos(S.camPitch), tgt.y + d * Math.sin(S.camPitch), tgt.z - f.z * d * Math.cos(S.camPitch));
+  // colisão de câmera: aproxima quando uma construção ou o trem fica no caminho
+  let d = S.camDist;
+  if ((S.occT = (S.occT || 0) + 1) % 2 === 0 || S.occD === undefined) {
+    const dir = camDir.set(-f.x * Math.cos(S.camPitch), Math.sin(S.camPitch), -f.z * Math.cos(S.camPitch)).normalize();
+    occRay.set(tgt, dir); occRay.far = S.camDist;
+    const vis = world.occluders.filter(o => o.visible && o.parent?.visible !== false);
+    const hit = occRay.intersectObjects(vis, false)[0];
+    S.occD = hit ? Math.max(1.2, hit.distance - 0.35) : S.camDist;
+  }
+  S.camD = S.camD === undefined ? S.occD : S.camD + (S.occD - S.camD) * Math.min(1, dt * (S.occD < S.camD ? 14 : 3));
+  d = Math.min(d, S.camD);
+  const cp = new THREE.Vector3(tgt.x - f.x * d * Math.cos(S.camPitch), tgt.y + d * Math.sin(S.camPitch), tgt.z - f.z * d * Math.cos(S.camPitch));
   cp.y = Math.max(cp.y, world.walkHeight(cp.x, cp.z) + 0.6, WATER_Y + 0.4);
   camera.position.lerp(cp, 1 - Math.exp(-dt * 10)); S.lookAt.lerp(tgt, 1 - Math.exp(-dt * 14)); camera.lookAt(S.lookAt);
 }
@@ -589,7 +683,8 @@ function updateXR(dt) {
 
 let lastHud = '';
 function loop() {
-  const now = performance.now(), dt = Math.min(0.05, (now - lastT) / 1000); lastT = now; S.t += dt;
+  const now = performance.now(), raw = (now - lastT) / 1000, dt = Math.min(0.05, raw); lastT = now; S.t += dt;
+  adaptResolution(raw);
   if (S.mode === 'menu') {
     // memorial
     const cam = camera, aspect = innerWidth / innerHeight, D = Math.max(4.3, 4.1 / (Math.tan(THREE.MathUtils.degToRad(29)) * aspect));
@@ -602,13 +697,13 @@ function loop() {
       vrTitle.mesh.visible = vrEpi.mesh.visible = true;
       let hv = -1; for (const c of ctrls) { const i = pickMemorial(pointRay(c)); if (i >= 0) hv = i; } menu.hover = hv;
     }
-    document.querySelectorAll('.hero-card').forEach((e, i) => e.classList.toggle('hl', i === menu.hover));
+    if (menu.hover !== menu.hlShown) { menu.hlShown = menu.hover; document.querySelectorAll('.hero-card').forEach((e, i) => e.classList.toggle('hl', i === menu.hover)); }
     menu.mem.chars.forEach((c, i) => {
       const on = i === menu.hover; c.anim = on ? 'wave' : 'idle'; c.update(dt, 0);
       c.root.rotation.y += ((on ? 0.25 * (c.root.position.x < 0 ? 1 : -1) : 0) - c.root.rotation.y) * 0.08;
       menu.spots[i].intensity += ((on ? 40 : menu.hover < 0 ? 18 : 9) - menu.spots[i].intensity) * 0.1;
     });
-    menu.dust.rotation.y += dt * 0.02;
+    menu.dust.rotation.y += dt * 0.02; audio.setAmbient({ world: false });
     if (S.xr) menu.scene.add(rig);
   } else {
     if (!S.xr) { vrTitle.mesh.visible = vrEpi.mesh.visible = false; }
@@ -626,7 +721,13 @@ function loop() {
       S.player.root.position.copy(S.pos); S.player.root.rotation.y = S.yaw; S.player.update(dt, sp);
       S.player.root.visible = !S.xr && S.mode !== 'epilogue';
       if (S.mode === 'dialog' && S.dq?.npc) { const p = S.npcs[S.dq.npc]?.c.root.position; if (p) { let a = Math.atan2(p.x - S.pos.x, p.z - S.pos.z) - S.yaw; a = Math.atan2(Math.sin(a), Math.cos(a)); S.yaw += a * Math.min(1, dt * 5); } }
-      const si = Math.floor(S.player.phase / Math.PI); if (sp > 0.5 && si !== stepIdx) audio.step(heightAt(S.pos.x, S.pos.z) < WATER_Y); stepIdx = si;
+      const si = Math.floor(S.player.phase / Math.PI);
+      if (sp > 0.5 && si !== stepIdx) {
+        const onBridge = world.bridgeOn && Math.abs(S.pos.z - 30) < 1.7 && Math.abs(S.pos.x - riverX(30)) < 11;
+        const onDeck = world.decks.some(d => !d.off && Math.abs(S.pos.x - d.x) < d.hw && Math.abs(S.pos.z - d.z) < d.hd);
+        audio.step(heightAt(S.pos.x, S.pos.z) < WATER_Y && !onBridge ? 'water' : onBridge ? 'wood' : onDeck ? 'stone' : 'grass');
+      }
+      stepIdx = si;
     }
     if (S.memorial) S.memorial.chars.forEach(c => c.update(dt, 0));
     updateNPCs(dt);
@@ -653,13 +754,15 @@ function loop() {
     // som ambiente
     const dRiver = Math.abs(S.pos.x - riverX(S.pos.z)), dFalls = Math.hypot(S.pos.x - FALLS.x, S.pos.z - FALLS.z);
     let fire = 0; for (const F of world.fires) if (!F.off) fire = Math.max(fire, 1 - Math.hypot(S.pos.x - F.x, S.pos.z - F.z) / 16);
-    audio.setAmbient({ river: Math.max(0, 1 - (dRiver - 6) / 45), falls: Math.max(0, 1 - dFalls / 70), fire, night: world.night, wind: 0.04 + Math.min(0.08, Math.max(0, S.pos.y) * 0.003) });
+    const T = world.train; if (T && T.g.visible) { const lp = T.cars[0].position, dT = Math.hypot(lp.x - S.pos.x, lp.z - S.pos.z); audio.setTrain(Math.max(0, 1 - dT / 140), Math.abs(T.speed) * 160); } else audio.setTrain(0, 0);
+    const bell = world.track.visible ? Math.max(0, 1 - Math.hypot(S.pos.x - P.capela[0], S.pos.z - P.capela[1]) / 160) : 0;
+    audio.setAmbient({ bell, river: Math.max(0, 1 - (dRiver - 6) / 45), falls: Math.max(0, 1 - dFalls / 70), fire, night: world.night, wind: 0.04 + Math.min(0.08, Math.max(0, S.pos.y) * 0.003) });
     world.update(dt, S.t, S.pos, camera);
   }
-  renderer.render(active, camera);
+  draw();
 }
 
-addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); composer?.setSize(innerWidth, innerHeight); });
 renderer.setAnimationLoop(loop);
 audio.setTheme('menu');
 requestAnimationFrame(() => { document.getElementById('loader').classList.add('off'); ui.show('#menu'); });

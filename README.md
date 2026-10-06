@@ -36,14 +36,25 @@ A pasta `dist/` também é um site estático pronto: pode ser enviada para qualq
 
 ## Controles
 
-- **Teclado/mouse:** WASD ou setas para andar · Shift corre · arrastar o mouse gira a câmera · roda do mouse aproxima · **E**/Espaço/clique para conversar e avançar · Esc pausa.
+- **Teclado/mouse:** WASD ou setas para andar · Shift corre · arrastar o mouse gira a câmera · roda do mouse aproxima · **E**/Espaço/clique para conversar e avançar · Esc pula a conversa ou pausa · **M** liga/desliga o som.
 - **Celular/tablet:** joystick na esquerda, arrastar na direita gira a câmera, botão ✋ para interagir.
 - **Gamepad:** analógico esquerdo anda, direito gira a câmera, A interage, Start pausa.
 - **Óculos VR (Meta Quest e similares):** abra o site no navegador do óculos e toque em **Entrar em VR**. Analógico esquerdo anda (segure o grip para correr), analógico direito gira 30°, **gatilho** escolhe personagem, conversa e avança textos.
 
-## Qualidade gráfica
+## Qualidade gráfica e desempenho
 
-A qualidade se ajusta sozinha (óculos e celulares usam o modo leve). Para forçar: `?q=low` (computadores fracos) ou `?q=high`.
+Visual estilizado com texturas procedurais (madeira, telha, sapê, pedra, reboco, folhagem, tecido), janelas que acendem ao anoitecer, água com espuma, sombras, bloom e correção de cor.
+
+O jogo se adapta sozinho a qualquer aparelho:
+- **Resolução dinâmica:** ajusta a nitidez para manter a fluidez.
+- **Níveis automáticos:** se ainda estiver lento, desliga o pós-processamento e depois suaviza as sombras (sem remover conteúdo).
+- **Óculos VR e celulares** já começam no modo leve (sem pós-processamento).
+
+Para forçar: `?q=low` (computadores fracos) ou `?q=high`.
+
+## Som
+
+Música, sons ambientes (mata, cigarras, sapos, rio, cachoeira, fogueira, sino da capela, trem) e efeitos. Botão **Som** no menu, na pausa e no canto da tela (🔊), ou tecla **M**.
 
 ## Fontes
 

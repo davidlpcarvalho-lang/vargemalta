@@ -61,13 +61,21 @@ export class UI {
     this.el = { menu: $('#menu'), hud: $('#hud'), obj: $('#obj-text'), prog: $('#obj-prog'), tag: $('#chap-tag'), arrow: $('#arrow'), dist: $('#dist'), prompt: $('#prompt'), dialog: $('#dialog'), who: $('#who'), txt: $('#txt'), card: $('#card'), fade: $('#fade'), letter: $('#letterbox'), toast: $('#toast'), pause: $('#pause') };
     this.typing = null;
   }
-  show(id, on = true) { const e = typeof id === 'string' ? $(id) : id; e.classList.toggle('on', on); }
+  show(id, on = true) {
+    const e = typeof id === 'string' ? $(id) : id; e.classList.toggle('on', on);
+    // tela escondida não pode receber foco nem teclado (evita acionar botões invisíveis)
+    e.inert = !on; if (!on && e.contains(document.activeElement)) document.activeElement.blur();
+  }
   fade(on) { return new Promise(r => { this.el.fade.classList.toggle('on', on); setTimeout(r, on ? 650 : 50); }); }
   objective(text, prog = '') { this.el.obj.textContent = text; this.el.prog.textContent = prog; this.el.hud.querySelector('.objective').classList.remove('pulse'); void this.el.hud.offsetWidth; this.el.hud.querySelector('.objective').classList.add('pulse'); }
-  prompt(t) { this.el.prompt.textContent = t || ''; this.el.prompt.classList.toggle('on', !!t); }
+  prompt(t) { t = t || ''; if (t === this._prompt) return; this._prompt = t; this.el.prompt.textContent = t; this.el.prompt.classList.toggle('on', !!t); }
   compass(angle, dist) {
-    if (angle === null) { this.el.arrow.parentElement.style.opacity = 0; return; }
-    this.el.arrow.parentElement.style.opacity = 1; this.el.arrow.style.transform = `rotate(${angle}rad)`; this.el.dist.textContent = Math.round(dist) + ' m';
+    const c = this.el.arrow.parentElement, on = angle !== null;
+    if (on !== this._cOn) { this._cOn = on; c.style.opacity = on ? 1 : 0; }
+    if (!on) return;
+    const a = Math.round(angle * 50) / 50, d = Math.round(dist);
+    if (a !== this._cA) { this._cA = a; this.el.arrow.style.transform = `rotate(${a}rad)`; }
+    if (d !== this._cD) { this._cD = d; this.el.dist.textContent = d + ' m'; }
   }
   toast(t) { const e = this.el.toast; e.textContent = t; e.classList.remove('on'); void e.offsetWidth; e.classList.add('on'); }
   dialog(who, text) {
@@ -75,17 +83,19 @@ export class UI {
     d.who.textContent = who; d.who.style.color = SPEAKER_COLORS[who] || '#e9d8b6';
     d.dialog.classList.toggle('narr', who === 'Narração');
     clearInterval(this.typing); let i = 0; d.txt.textContent = ''; this.full = text; this.done = false;
-    this.typing = setInterval(() => { i += 2; d.txt.textContent = text.slice(0, i); if (i >= text.length) { clearInterval(this.typing); this.done = true; } }, 16);
+    let k = 0;
+    this.typing = setInterval(() => { i += 2; d.txt.textContent = text.slice(0, i); if (++k % 4 === 0 && /\w/.test(text[i] || '')) this.onType?.(); if (i >= text.length) { clearInterval(this.typing); this.done = true; } }, 16);
   }
   skipType() { if (!this.done) { clearInterval(this.typing); this.el.txt.textContent = this.full; this.done = true; return true; } return false; }
-  closeDialog() { this.el.dialog.classList.remove('on'); this.el.letter.classList.remove('on'); }
+  closeDialog() { clearInterval(this.typing); this.done = true; this.el.dialog.classList.remove('on'); this.el.letter.classList.remove('on'); }
   card({ kicker = '', title = '', body = '', note = '', extra = '', buttons = [] }) {
     const c = this.el.card;
     c.querySelector('.k').textContent = kicker; c.querySelector('h2').innerHTML = title;
     c.querySelector('.b').innerHTML = body; c.querySelector('.n').innerHTML = note; c.querySelector('.x').innerHTML = extra;
     const bt = c.querySelector('.btns'); bt.innerHTML = '';
-    buttons.forEach(([label, fn, primary], i) => { const b = document.createElement('button'); b.textContent = label; b.className = primary || i === 0 ? 'primary' : ''; b.onclick = fn; bt.appendChild(b); });
-    c.classList.add('on'); setTimeout(() => bt.querySelector('button')?.focus(), 400);
+    let used = false; // cada cartão aceita um único clique (sem acionamento duplo)
+    buttons.forEach(([label, fn, primary], i) => { const b = document.createElement('button'); b.textContent = label; b.className = primary || i === 0 ? 'primary' : ''; b.onclick = () => { if (used) return; used = true; fn(); }; bt.appendChild(b); });
+    this.show(c, true); setTimeout(() => { if (c.classList.contains('on')) bt.querySelector('button')?.focus(); }, 400);
   }
-  closeCard() { this.el.card.classList.remove('on'); }
+  closeCard() { this.show(this.el.card, false); }
 }

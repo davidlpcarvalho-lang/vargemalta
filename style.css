@@ -52,6 +52,7 @@ body.touch #menu .hint { display: none; }
 #arrow { width: 0; height: 0; border-left: 11px solid transparent; border-right: 11px solid transparent; border-bottom: 26px solid var(--gold); filter: drop-shadow(0 2px 6px rgba(0,0,0,.6)); transition: transform .1s linear; }
 #dist { font-size: 12px; font-weight: 600; text-shadow: 0 1px 4px #000; }
 #btn-pause { position: absolute; top: max(16px, env(safe-area-inset-top)); right: 16px; width: 42px; height: 42px; border-radius: 50%; border: 1px solid rgba(244,234,216,.3); background: var(--panel); color: var(--cream); pointer-events: auto; font-size: 12px; }
+#btn-mute { position: absolute; top: max(16px, env(safe-area-inset-top)); right: 66px; width: 42px; height: 42px; border-radius: 50%; border: 1px solid rgba(244,234,216,.3); background: var(--panel); color: var(--cream); pointer-events: auto; font-size: 16px; line-height: 1; }
 #prompt { position: absolute; left: 50%; bottom: 120px; transform: translate(-50%, 10px); padding: 10px 20px; border-radius: 999px; background: var(--panel); border: 1px solid var(--gold); font-weight: 600; font-size: 15px; opacity: 0; transition: .25s; white-space: nowrap; }
 #prompt.on { opacity: 1; transform: translate(-50%, 0); }
 #toast { position: absolute; left: 50%; top: 84px; transform: translateX(-50%); padding: 8px 18px; font-family: var(--serif); font-size: 20px; color: var(--gold); opacity: 0; text-shadow: 0 2px 10px #000; }
@@ -68,7 +69,9 @@ body.touch #act { display: block; position: absolute; right: 28px; bottom: 44px;
 #letterbox i:last-child { bottom: 0; transform: translateY(100%); }
 #letterbox.on i { transform: none; }
 #dialog { position: fixed; left: 50%; bottom: calc(9vh + 18px); transform: translate(-50%, 20px); width: min(860px, calc(100vw - 32px)); padding: 18px 24px 14px; border-radius: 16px; background: var(--panel); border: 1px solid rgba(217,178,111,.35); backdrop-filter: blur(10px); opacity: 0; pointer-events: none; transition: .35s ease; z-index: 8; }
-#dialog.on { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; cursor: pointer; }
+#dialog.on { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; cursor: pointer; user-select: none; }
+#skip { position: absolute; top: 12px; right: 14px; padding: 5px 12px; border-radius: 999px; border: 1px solid rgba(244,234,216,.25); background: transparent; color: rgba(244,234,216,.7); font-size: 11px; letter-spacing: .06em; }
+#skip:hover { border-color: var(--gold); color: var(--cream); }
 #who { font-family: var(--serif); font-size: 24px; font-weight: 700; margin-bottom: 4px; }
 #txt { font-family: var(--serif); font-size: clamp(19px, 2.1vw, 24px); line-height: 1.35; min-height: 3.2em; }
 #dialog.narr #txt { font-style: italic; color: #efe2c8; }

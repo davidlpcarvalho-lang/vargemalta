@@ -28,26 +28,28 @@
     <footer>
       <button id="btn-epi" class="ghost">Epílogo</button>
       <button id="btn-src" class="ghost">Fontes e notas</button>
+      <button id="btn-sfx" class="ghost">Som</button>
       <button id="btn-snd" class="ghost">Música</button>
       <button id="btn-voice" class="ghost">Narração por voz</button>
       <button id="btn-vr" class="vr" disabled>VR indisponível neste navegador</button>
     </footer>
-    <p class="hint">WASD/setas para andar · Shift corre · arraste para girar a câmera · E para conversar</p>
+    <p class="hint">WASD/setas para andar · Shift corre · arraste para girar a câmera · E para conversar · M liga/desliga o som</p>
   </section>
 
   <div id="hud">
     <div class="objective"><span id="chap-tag"></span><p><span id="obj-text"></span> <b id="obj-prog"></b></p></div>
     <div class="compass"><div id="arrow"></div><span id="dist"></span></div>
     <button id="btn-pause" aria-label="Pausa">❚❚</button>
+    <button id="btn-mute" aria-label="Desligar som">🔊</button>
     <div id="prompt"></div>
     <div id="toast"></div>
     <div id="joy"><i></i></div>
     <button id="act" aria-label="Interagir">✋</button>
   </div>
 
-  <div id="dialog"><div id="who"></div><div id="txt"></div><div class="next">clique, E ou espaço ▸</div></div>
+  <div id="dialog"><button id="skip" type="button" tabindex="-1">Pular conversa ▸▸</button><div id="who"></div><div id="txt"></div><div class="next">clique, E ou espaço ▸</div></div>
 
-  <section id="card" class="screen">
+  <section id="card" class="screen" inert>
     <div class="inner">
       <div class="k"></div>
       <h2></h2>
@@ -58,7 +60,7 @@
     </div>
   </section>
 
-  <section id="pause" class="screen">
+  <section id="pause" class="screen" inert>
     <div class="inner small">
       <div class="k">Pausa</div>
       <h2>Caminhos da Memória</h2>
@@ -66,6 +68,7 @@
         <button id="p-resume" class="primary">Continuar</button>
         <button id="p-restart">Reiniciar capítulo</button>
         <button id="p-menu">Voltar ao memorial</button>
+        <button class="t-sound"></button>
         <button class="t-music"></button>
         <button class="t-voice"></button>
       </div>

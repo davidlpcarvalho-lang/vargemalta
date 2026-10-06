@@ -3,12 +3,16 @@
 const NOTE = n => 440 * Math.pow(2, (n - 69) / 12);
 
 export class AudioEngine {
-  constructor() { this.ctx = null; this.theme = null; this.musicOn = true; this.drums = false; this.amb = {}; }
+  constructor() { this.ctx = null; this.theme = null; this.musicOn = true; this.muted = false; this.drums = false; this.amb = {}; this.train = { level: 0, rate: 0 }; this.nextChug = 0; this.nextCicada = 0; this.nextFrog = 0; this.nextPop = 0; this.nextBell = 0; this.bellNear = 0; this.fireLevel = 0; this.riverLevel = 0; this.day = true; }
+  setMuted(m) {
+    this.muted = m; if (!this.ctx) return;
+    this.master.gain.setTargetAtTime(m ? 0 : 0.9, this.ctx.currentTime, 0.08);
+  }
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
     const ctx = this.ctx = new C();
-    this.master = ctx.createGain(); this.master.gain.value = 0.9; this.master.connect(ctx.destination);
+    this.master = ctx.createGain(); this.master.gain.value = this.muted ? 0 : 0.9; this.master.connect(ctx.destination);
     const comp = ctx.createDynamicsCompressor(); comp.connect(this.master);
     this.out = comp;
     this.music = ctx.createGain(); this.music.gain.value = 0.32; this.music.connect(comp);
@@ -71,6 +75,11 @@ export class AudioEngine {
     // pássaros e grilos
     if (this.ambient !== 'none') {
       if (!this.night && now > this.nextBird) { this.bird(now + 0.05); this.nextBird = now + 1.5 + Math.random() * 4; }
+      if (!this.night && this.inWorld && now > this.nextCicada) { this.cicada(now + 0.05); this.nextCicada = now + 18 + Math.random() * 22; }
+      if (this.night && this.riverLevel > 0.15 && now > this.nextFrog) { this.frog(now + 0.05); this.nextFrog = now + 1.2 + Math.random() * 3 / this.riverLevel; }
+      if (this.fireLevel > 0.05 && now > this.nextPop) { this.noise({ t: now + 0.02, d: 0.02, f: 3000 + Math.random() * 3000, type: 'highpass', g: 0.08 * this.fireLevel * Math.random(), dest: this.ambBus }); this.nextPop = now + 0.05 + Math.random() * 0.35; }
+      if (this.train.level > 0.02 && this.train.rate > 0.05 && now > this.nextChug) { this.noise({ t: now + 0.02, d: 0.13, f: 260, type: 'lowpass', q: 0.7, g: 0.35 * this.train.level, dest: this.ambBus }); this.noise({ t: now + 0.02, d: 0.08, f: 2400, type: 'bandpass', q: 0.8, g: 0.06 * this.train.level, dest: this.ambBus }); this.nextChug = now + Math.max(0.12, 0.5 / this.train.rate); }
+      if (this.bellNear > 0.05 && now > this.nextBell) { this.bell(now + 0.1, 0.12 * this.bellNear); this.nextBell = now + 50 + Math.random() * 30; }
       if (this.night && now > this.nextCricket) { for (let i = 0; i < 3; i++) this.tone({ f: 4200 + Math.random() * 300, t: now + i * 0.06, a: 0.005, d: 0.04, g: 0.025, dest: this.ambBus, verb: 0 }); this.nextCricket = now + 0.35 + Math.random() * 0.5; }
     }
     // música
@@ -125,13 +134,39 @@ export class AudioEngine {
       if (S % 32 === 0) this.tone({ type: 'triangle', f: NOTE(38), t, a: 1, d: dur * 30, g: 0.04, filter: 500, verb: 0.4 });
     }
   }
+  cicada(t) { // cigarras da Mata Atlântica
+    const ctx = this.ctx, s = ctx.createBufferSource(); s.buffer = this.noiseBuf; s.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 4800 + Math.random() * 900; f.Q.value = 6;
+    const am = ctx.createGain(), lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = 38 + Math.random() * 12; lg.gain.value = 0.5; am.gain.value = 0.5; lfo.connect(lg); lg.connect(am.gain);
+    const g = ctx.createGain(), pan = ctx.createStereoPanner(); pan.pan.value = Math.random() * 1.6 - 0.8;
+    s.connect(f); f.connect(am); am.connect(g); g.connect(pan); pan.connect(this.ambBus);
+    const d = 4 + Math.random() * 3; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.05, t + d * 0.4); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    s.start(t); lfo.start(t); s.stop(t + d + 0.1); lfo.stop(t + d + 0.1);
+  }
+  frog(t) { const n = 2 + Math.floor(Math.random() * 3), f = 260 + Math.random() * 160; for (let i = 0; i < n; i++) this.tone({ type: 'square', f, t: t + i * 0.11, a: 0.005, d: 0.06, g: 0.025 * this.riverLevel, dest: this.ambBus, verb: 0.2, filter: 900 }); }
+  bell(t, g = 0.12) { [1, 2.0, 2.4, 3.0, 4.2].forEach((r, i) => this.tone({ f: 330 * r, t, a: 0.004, d: 3.2 - i * 0.4, g: g / (1 + i * 0.6), dest: this.ambBus, verb: 0.6 })); }
   // ---- efeitos ----
+  murmur(pitch) { // "voz" estilizada das falas
+    if (!this.ctx) return; const t = this.ctx.currentTime, f = pitch * (0.85 + Math.random() * 0.35);
+    this.tone({ type: 'triangle', f, t, a: 0.008, d: 0.06, g: 0.035, dest: this.sfx, verb: 0.08, filter: 1600 });
+  }
+  whoosh() { if (!this.ctx) return; const ctx = this.ctx, t = ctx.currentTime, s = ctx.createBufferSource(); s.buffer = this.noiseBuf; const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.2; f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(2400, t + 0.5); const g = ctx.createGain(); s.connect(f); f.connect(g); g.connect(this.sfx); this.env(g, t, 0.15, 0.4, 0.07); s.start(t); s.stop(t + 0.6); }
+  build() { if (!this.ctx) return; const t = this.ctx.currentTime; for (let i = 0; i < 6; i++) { const tt = t + i * 0.28 + Math.random() * 0.05; this.tone({ f: 190 + Math.random() * 40, t: tt, a: 0.002, d: 0.09, g: 0.12, dest: this.sfx, verb: 0.3 }); this.noise({ t: tt, d: 0.04, f: 1500, g: 0.1 }); } }
+  dig() { if (!this.ctx) return; const t = this.ctx.currentTime; this.noise({ t, d: 0.18, f: 300, type: 'lowpass', g: 0.25 }); this.noise({ t: t + 0.2, d: 0.14, f: 260, type: 'lowpass', g: 0.18 }); }
+  setTrain(level, rate) { this.train.level = level; this.train.rate = rate; }
   ui() { if (!this.ctx) return; this.tone({ f: 880, t: this.ctx.currentTime, a: 0.005, d: 0.08, g: 0.05, dest: this.sfx, verb: 0.1 }); }
   collect() { if (!this.ctx) return; const t = this.ctx.currentTime; [76, 81, 88].forEach((n, i) => this.tone({ f: NOTE(n), t: t + i * 0.07, a: 0.005, d: 0.4, g: 0.08, dest: this.sfx, verb: 0.4 })); }
   success() { if (!this.ctx) return; const t = this.ctx.currentTime; [64, 67, 72, 76].forEach((n, i) => this.tone({ type: 'triangle', f: NOTE(n), t: t + i * 0.11, a: 0.01, d: 1.1, g: 0.07, dest: this.sfx, verb: 0.6 })); }
-  step(water) { if (!this.ctx) return; this.noise({ t: this.ctx.currentTime, d: water ? 0.12 : 0.07, f: water ? 1400 : 420 + Math.random() * 200, q: 0.9, g: water ? 0.08 : 0.06 }); }
+  step(kind = 'grass') {
+    if (!this.ctx) return; const t = this.ctx.currentTime;
+    if (kind === 'water') this.noise({ t, d: 0.14, f: 1300, q: 0.7, g: 0.09 });
+    else if (kind === 'wood') { this.tone({ f: 150 + Math.random() * 30, t, a: 0.002, d: 0.07, g: 0.07, dest: this.sfx, verb: 0.05 }); this.noise({ t, d: 0.04, f: 900, g: 0.05 }); }
+    else if (kind === 'stone') this.noise({ t, d: 0.05, f: 1800 + Math.random() * 500, q: 1.4, g: 0.05 });
+    else this.noise({ t, d: 0.08, f: 420 + Math.random() * 200, q: 0.9, g: 0.06 });
+  }
   whistle() { if (!this.ctx) return; const t = this.ctx.currentTime; [0, 0.5].forEach(o => this.tone({ type: 'square', f: 520, t: t + o, a: 0.05, d: 0.4, g: 0.03, dest: this.sfx, verb: 0.8, filter: 1800 })); }
-  setAmbient({ river = 0, falls = 0, fire = 0, night = 0, wind = 0.05 }) {
+  setAmbient({ river = 0, falls = 0, fire = 0, night = 0, wind = 0.05, bell = 0, world = true }) {
+    this.fireLevel = fire; this.riverLevel = river; this.bellNear = bell; this.inWorld = world;
     if (!this.ctx) return; const t = this.ctx.currentTime;
     this.amb.river.gain.setTargetAtTime(river * 0.18, t, 0.3); this.amb.falls.gain.setTargetAtTime(falls * 0.3, t, 0.3);
     this.amb.fire.gain.setTargetAtTime(fire * 0.05, t, 0.3); this.amb.wind.gain.setTargetAtTime(wind, t, 0.5);

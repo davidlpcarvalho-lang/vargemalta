@@ -3,10 +3,73 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-export const CLAY = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.58, metalness: 0 });
+// Superfícies (padrões procedurais no shader, sem baixar imagens)
+export const SURF = { smooth: 0, wood: 1, tile: 2, thatch: 3, stone: 4, plaster: 5, leaf: 6, bark: 7, cloth: 8, hair: 9, glass: 10, rock: 11 };
+export const UNIFORMS = { time: { value: 0 }, night: { value: 0 } };
+const SURF_GLSL = `
+float sh1(float n){ return fract(sin(n) * 43758.5453); }
+float shh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float sn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return mix(mix(shh(i), shh(i+vec2(1,0)), f.x), mix(shh(i+vec2(0,1)), shh(i+vec2(1,1)), f.x), f.y); }
+float surfPattern(float sid, vec3 op, vec3 on, out float glow){
+  glow = 0.0;
+  vec3 an = abs(on);
+  vec2 uv = an.y > max(an.x, an.z) ? op.xz : (an.x > an.z ? op.zy : op.xy);
+  if (sid < 0.5) return 1.0;
+  if (sid < 1.5) { float u = uv.x * 3.6, id = floor(u), f = fract(u);
+    float gap = smoothstep(0.0, 0.05, f) * smoothstep(1.0, 0.95, f);
+    return (0.84 + 0.16 * sh1(id * 13.7) + 0.1 * sn(vec2(id * 5.0, uv.y * 2.5))) * mix(0.62, 1.0, gap); }
+  if (sid < 2.5) { float r = uv.x * 3.2, row = floor(r), fr = fract(r), c = fract(uv.y * 3.4 + row * 0.5);
+    return (0.78 + 0.26 * sin(c * 3.14159)) * mix(0.62, 1.0, smoothstep(0.0, 0.12, fr)) * (0.92 + 0.12 * sh1(row * 3.1 + floor(uv.y * 3.4 + row * 0.5))); }
+  if (sid < 3.5) return 0.74 + 0.34 * sn(vec2(uv.y * 34.0, uv.x * 1.6)) * (0.8 + 0.2 * smoothstep(0.0, 0.2, fract(uv.x * 2.6)));
+  if (sid < 4.5) { float r = uv.y * 2.9, row = floor(r), fr = fract(r), u = uv.x * 1.7 + row * 0.5, fu = fract(u);
+    float mortar = smoothstep(0.0, 0.07, fr) * smoothstep(1.0, 0.93, fr) * smoothstep(0.0, 0.05, fu) * smoothstep(1.0, 0.95, fu);
+    return (0.8 + 0.22 * sh1(floor(u) * 7.3 + row * 1.9) + 0.08 * sn(uv * 9.0)) * mix(0.6, 1.0, mortar); }
+  if (sid < 5.5) return (0.9 + 0.1 * sn(uv * 1.3) + 0.05 * sn(uv * 11.0)) * mix(0.72, 1.0, smoothstep(0.05, 1.3, op.y));
+  if (sid < 6.5) return (0.72 + 0.4 * sn(op.xz * 2.4 + op.y * 1.7) * sn(op.xy * 3.3)) * (0.66 + 0.34 * (on.y * 0.5 + 0.5));
+  if (sid < 7.5) return 0.72 + 0.32 * sn(vec2(atan(op.z, op.x) * 2.5, op.y * 0.7)) * sn(vec2(atan(op.z, op.x) * 9.0, op.y * 3.0));
+  if (sid < 8.5) return 0.9 + 0.11 * sn(uv * 55.0) + 0.04 * sn(uv * 7.0);
+  if (sid < 9.5) return 0.8 + 0.3 * sn(vec2(atan(op.x, op.z) * 24.0, op.y * 5.0));
+  if (sid < 10.5) { glow = 1.0; return 0.75 + 0.4 * smoothstep(0.3, 0.9, fract(uv.y * 0.8 + uv.x * 0.6)); }
+  return 0.78 + 0.26 * sn(op.xy * 1.4 + op.z) + 0.1 * sn(op.zy * 6.0);
+}`;
+// Material com padrões de superfície (+ balanço de vento opcional)
+export function surfMaterial({ wind = 0, roughness = 0.6, flat = false, rim = 0 } = {}) {
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness: 0, flatShading: flat });
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uTime = UNIFORMS.time; sh.uniforms.uNight = UNIFORMS.night;
+    sh.vertexShader = 'uniform float uTime;\nattribute float surf;\nvarying float vSurf; varying vec3 vOP; varying vec3 vON;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vSurf = surf; vOP = position; vON = normal;
+      ${wind ? `vec3 ip = vec3(0.0);
+      #ifdef USE_INSTANCING
+        ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+      #endif
+      float sw = max(0.0, transformed.y) * ${wind.toFixed(4)};
+      transformed.x += sin(uTime * 1.4 + ip.x * 0.13 + ip.z * 0.07) * sw;
+      transformed.z += cos(uTime * 1.1 + ip.z * 0.11) * sw * 0.6;` : ''}`);
+    sh.fragmentShader = 'uniform float uNight;\nvarying float vSurf; varying vec3 vOP; varying vec3 vON;\n' + SURF_GLSL + '\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      float glow; diffuseColor.rgb *= surfPattern(floor(vSurf + 0.5), vOP, normalize(vON), glow);
+      totalEmissiveRadiance += vec3(1.0, 0.62, 0.3) * glow * uNight * 2.4;`);
+    if (rim) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      float rimF = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
+      totalEmissiveRadiance += diffuseColor.rgb * rimF * ${rim.toFixed(3)};`);
+  };
+  m.customProgramCacheKey = () => 'surf' + wind + flat + rim;
+  return m;
+}
+export const CLAY = surfMaterial({ roughness: 0.58 });
+export const CHAR = surfMaterial({ roughness: 0.5, rim: 0.55 }); // brilho de contorno estilo vinil
+const BLOB = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, opacity: 0.55, polygonOffset: true, polygonOffsetFactor: -2, map: (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'), g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(0,0,0,.75)'); g.addColorStop(0.55, 'rgba(0,0,0,.35)'); g.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})() });
+const BLOB_G = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2); BLOB_G.userData.shared = true;
 
 const G = {
   sph: new THREE.SphereGeometry(1, 20, 14),
+  msph: new THREE.SphereGeometry(1, 12, 8),
+  tiny: new THREE.IcosahedronGeometry(1, 0),
+  tcone: new THREE.ConeGeometry(1, 1, 5),
   lsph: new THREE.IcosahedronGeometry(1, 1),
   cyl: new THREE.CylinderGeometry(1, 1, 1, 16),
   box: new THREE.BoxGeometry(1, 1, 1),
@@ -15,10 +78,23 @@ const G = {
   smile: new THREE.TorusGeometry(1, 0.2, 6, 14, Math.PI),
   ring: new THREE.TorusGeometry(1, 0.16, 6, 20)
 };
+for (const g of Object.values(G)) g.userData.shared = true;
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3(), _s = new THREE.Vector3();
 
 export class Builder {
-  constructor() { this.parts = []; }
+  // cur = superfície atual; L = aparência do personagem (superfície automática pela cor)
+  constructor(L = null) { this.parts = []; this.cur = 0; this.L = L; }
+  surfFor(color) {
+    const L = this.L; if (!L) return this.cur;
+    if (color === L.skin || /^#(fbfaf6|2a1a10|050302|ffffff|5a2318|3d3a37|57534e)$/i.test(color)) return SURF.smooth;
+    if (color === L.hair || color === L.beardColor) return SURF.hair;
+    if (/^#(d8c08a|cdb27a|c9a868|a98a50)$/i.test(color)) return SURF.thatch;
+    return SURF.cloth;
+  }
+  tag(g, color) {
+    const n = g.attributes.position.count, sf = new Float32Array(n).fill(this.surfFor(color));
+    g.setAttribute('surf', new THREE.BufferAttribute(sf, 1));
+  }
   add(geo, color, p = [0, 0, 0], s = [1, 1, 1], r = [0, 0, 0]) {
     const g = geo.index ? geo.toNonIndexed() : geo.clone();
     if (g.attributes.uv) g.deleteAttribute('uv');
@@ -28,6 +104,7 @@ export class Builder {
     const c = new THREE.Color(color), n = g.attributes.position.count, a = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
     g.setAttribute('color', new THREE.BufferAttribute(a, 3));
+    this.tag(g, color);
     this.parts.push(g);
     return this;
   }
@@ -43,6 +120,7 @@ export class Builder {
     const c = new THREE.Color(color), n = g.attributes.position.count, arr = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
     g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    this.tag(g, color);
     return this;
   }
   geometry() { const g = mergeGeometries(this.parts); g.computeBoundingSphere(); return g; }
@@ -84,23 +162,23 @@ export const LOOKS = {
 
 // ---------- montagem ----------
 function head(L) {
-  const b = new Builder(), r = 0.165, hair = L.hair || '#111';
+  const b = new Builder(L), r = 0.165, hair = L.hair || '#111';
   b.add(G.sph, L.skin, [0, 0, 0], [r, r * 1.04, r * 0.98]);
-  b.add(G.sph, L.skin, [r * 0.97, -0.01, 0], [0.035, 0.05, 0.03]);
-  b.add(G.sph, L.skin, [-r * 0.97, -0.01, 0], [0.035, 0.05, 0.03]);
+  b.add(G.msph, L.skin, [r * 0.97, -0.01, 0], [0.035, 0.05, 0.03]);
+  b.add(G.msph, L.skin, [-r * 0.97, -0.01, 0], [0.035, 0.05, 0.03]);
   for (const sx of [-1, 1]) {
     b.add(G.sph, '#fbfaf6', [sx * 0.06, 0.004, 0.128], [0.043, 0.05, 0.03]);
     b.add(G.sph, '#2a1a10', [sx * 0.06, 0.0, 0.15], [0.03, 0.035, 0.016]);
-    b.add(G.sph, '#050302', [sx * 0.06, 0.0, 0.158], [0.016, 0.019, 0.01]);
-    b.add(G.sph, '#ffffff', [sx * 0.052, 0.014, 0.166], 0.008);
+    b.add(G.msph, '#050302', [sx * 0.06, 0.0, 0.158], [0.016, 0.019, 0.01]);
+    b.add(G.msph, '#ffffff', [sx * 0.052, 0.014, 0.166], 0.008);
     b.add(G.box, hair, [sx * 0.062, 0.068, 0.152], [0.06, 0.014, 0.016], [0, 0, sx * -0.12]);
     if (L.paint) for (const dy of [0, -0.03]) b.add(G.box, '#c0281e', [sx * 0.098, -0.035 + dy, 0.118], [0.05, 0.012, 0.01], [0, sx * 0.75, sx * 0.12]);
   }
-  b.add(G.sph, L.skin, [0, -0.035, 0.162], [0.025, 0.022, 0.022]);
+  b.add(G.msph, L.skin, [0, -0.035, 0.162], [0.025, 0.022, 0.022]);
   if (L.beard === 'full') b.add(G.sph, L.beardColor || hair, [0, -0.07, 0.025], [0.152, 0.12, 0.14]);
   if (L.beard) {
-    b.add(G.sph, L.beardColor || hair, [0.022, -0.063, 0.16], [0.03, 0.011, 0.012], [0, 0, -0.25]);
-    b.add(G.sph, L.beardColor || hair, [-0.022, -0.063, 0.16], [0.03, 0.011, 0.012], [0, 0, 0.25]);
+    b.add(G.msph, L.beardColor || hair, [0.022, -0.063, 0.16], [0.03, 0.011, 0.012], [0, 0, -0.25]);
+    b.add(G.msph, L.beardColor || hair, [-0.022, -0.063, 0.16], [0.03, 0.011, 0.012], [0, 0, 0.25]);
   }
   b.add(G.smile, '#5a2318', [0, -0.078, 0.158], [0.024, 0.02, 0.02], [0, 0, Math.PI]);
   const tilt = [-0.42, 0, 0];
@@ -159,11 +237,11 @@ function head(L) {
       break;
     }
   }
-  return b.mesh();
+  return b.mesh(CHAR);
 }
 
 function torso(L) {
-  const b = new Builder(), top = L.shirt || L.skin, fem = L.female;
+  const b = new Builder(L), top = L.shirt || L.skin, fem = L.female;
   const w = fem ? 0.86 : 1;
   b.add(G.cyl, top, [0, 0.27, 0], [0.19 * w, 0.5, 0.13], [0, 0, 0]);
   b.add(G.sph, top, [0, 0.47, 0], [0.205 * w, 0.09, 0.135]);
@@ -175,7 +253,7 @@ function torso(L) {
     const vg = new THREE.CylinderGeometry(0.2, 0.185, 0.46, 20, 1, true, 0.45, Math.PI * 2 - 0.9);
     b.add(vg, L.vest, [0, 0.27, 0], [1, 1, 0.74]);
     b.add(G.sph, L.vest, [0, 0.47, -0.01], [0.215, 0.085, 0.145]);
-    for (let i = 0; i < 4; i++) b.add(G.sph, '#a89a7a', [0.06, 0.4 - i * 0.07, 0.135], 0.011);
+    for (let i = 0; i < 4; i++) b.add(G.tiny, '#a89a7a', [0.06, 0.4 - i * 0.07, 0.135], 0.011);
   }
   if (L.sash) b.add(G.cyl, L.sash, [0, 0.06, 0], [0.175, 0.1, 0.135]);
   if (L.rope) b.add(G.ring, L.rope, [0, 0.04, 0], [0.17, 0.13, 0.25], [Math.PI / 2, 0, 0]);
@@ -187,7 +265,7 @@ function torso(L) {
   if (L.keffiyeh) b.add(G.ring, '#f3eee6', [0, 0.53, 0], [0.11, 0.11, 0.3], [Math.PI / 2 + 0.15, 0, 0]);
   if (L.necklace) {
     b.add(G.ring, '#5a2f17', [0, 0.53, 0.02], [0.1, 0.1, 0.12], [Math.PI / 2 + 0.45, 0, 0]);
-    for (let i = 0; i < 7; i++) { const a = (i - 3) * 0.35; b.add(G.cone, '#f4ecd8', [Math.sin(a) * 0.09, 0.47 - Math.cos(a) * 0.015, 0.1 + Math.cos(a) * 0.02], [0.012, 0.05, 0.012], [Math.PI, 0, 0]); }
+    for (let i = 0; i < 7; i++) { const a = (i - 3) * 0.35; b.add(G.tcone, '#f4ecd8', [Math.sin(a) * 0.09, 0.47 - Math.cos(a) * 0.015, 0.1 + Math.cos(a) * 0.02], [0.012, 0.05, 0.012], [Math.PI, 0, 0]); }
   }
   // quadril / saia
   if (L.dress) {
@@ -202,25 +280,25 @@ function torso(L) {
   } else {
     b.add(G.cyl, L.pants, [0, 0.02, 0], [0.168, 0.12, 0.128]);
   }
-  return b.mesh();
+  return b.mesh(CHAR);
 }
 
 function arm(L, side) {
-  const b = new Builder(), top = L.shirt || L.skin;
+  const b = new Builder(L), top = L.shirt || L.skin;
   const sleeveLong = L.shirt && L.sleeves === 'long', rolled = L.shirt && L.sleeves === 'rolled';
   b.add(G.cyl, L.shirt && L.sleeves !== 'none' ? top : L.skin, [0, -0.14, 0], [0.055, 0.28, 0.055]);
-  b.add(G.sph, sleeveLong ? top : L.skin, [0, -0.28, 0], 0.05);
+  b.add(G.msph, sleeveLong ? top : L.skin, [0, -0.28, 0], 0.05);
   b.add(G.cyl, sleeveLong ? top : L.skin, [0, -0.4, 0], [0.048, 0.25, 0.048]);
   if (rolled) b.add(G.cyl, top, [0, -0.27, 0], [0.062, 0.06, 0.062]);
   b.add(G.sph, L.skin, [0, -0.55, 0.005], [0.052, 0.066, 0.04]);
-  b.add(G.sph, L.skin, [side * -0.035, -0.525, 0.03], [0.02, 0.035, 0.02], [0.3, 0, 0]);
+  b.add(G.msph, L.skin, [side * -0.035, -0.525, 0.03], [0.02, 0.035, 0.02], [0.3, 0, 0]);
   if (L.cuffs) { b.add(G.cyl, '#3d3a37', [0, -0.46, 0], [0.072, 0.09, 0.072]); b.add(G.ring, '#57534e', [0, -0.46, 0], [0.072, 0.072, 0.2], [Math.PI / 2, 0, 0]); }
   if (L.bands) for (const y of [-0.12, -0.45]) { b.add(G.cyl, '#b4322a', [0, y, 0], [0.062, 0.04, 0.062]); b.add(G.cyl, '#1d1d1d', [0, y, 0], [0.064, 0.012, 0.064]); }
-  return b.mesh();
+  return b.mesh(CHAR);
 }
 
 function leg(L) {
-  const b = new Builder(), p = L.pants || L.skin;
+  const b = new Builder(L), p = L.pants || L.skin;
   switch (L.pantsStyle) {
     case 'baggy':
       b.add(G.cyl, p, [0, -0.3, 0], [0.11, 0.6, 0.11]);
@@ -242,7 +320,7 @@ function leg(L) {
   }
   if (L.shoes) b.add(G.sph, L.shoes, [0, -0.745, 0.04], [0.075, 0.055, 0.135]);
   else b.add(G.sph, L.skin, [0, -0.75, 0.035], [0.065, 0.04, 0.12]);
-  return b.mesh();
+  return b.mesh(CHAR);
 }
 
 // ---------- objetos de mão ----------
@@ -260,29 +338,29 @@ function flagTexture() {
   return flagTex;
 }
 export function prop(kind) {
-  const b = new Builder();
+  const b = new Builder(); b.cur = /suitcase|case/.test(kind) ? SURF.cloth : SURF.wood;
   switch (kind) {
     case 'spear':
       b.add(G.cyl, '#8a5a32', [0, 0.25, 0], [0.018, 1.9, 0.018]);
       b.add(G.cone, '#4a4440', [0, 1.28, 0], [0.04, 0.18, 0.02]);
       b.add(G.cyl, '#b4322a', [0, 1.13, 0], [0.024, 0.05, 0.024]);
-      return b.mesh();
+      return b.mesh(CHAR);
     case 'suitcase':
       b.add(G.box, '#7a4526', [0, -0.18, 0], [0.42, 0.3, 0.13]);
       b.add(G.box, '#5a321b', [0, -0.18, 0], [0.43, 0.04, 0.135]);
       b.add(G.ring, '#3f2312', [0, -0.01, 0], [0.05, 0.035, 0.1]);
       for (const sx of [-1, 1]) b.add(G.box, '#c8a050', [sx * 0.14, -0.05, 0.066], [0.03, 0.03, 0.01]);
-      return b.mesh();
+      return b.mesh(CHAR);
     case 'case':
       b.add(G.box, '#5b3a22', [0, -0.2, 0], [0.48, 0.34, 0.2]);
       b.add(G.box, '#3b2414', [0, -0.2, 0], [0.49, 0.05, 0.21]);
       for (const sx of [-1, 1]) b.add(G.box, '#2a1a10', [sx * 0.13, -0.2, 0], [0.04, 0.35, 0.21]);
       b.add(G.ring, '#2a1a10', [0, 0, 0], [0.06, 0.04, 0.1]);
-      return b.mesh();
+      return b.mesh(CHAR);
     case 'hoe':
       b.add(G.cyl, '#8a5a32', [0, 0.2, 0], [0.018, 1.5, 0.018]);
       b.add(G.box, '#5a5a5a', [0, 0.93, 0.08], [0.16, 0.12, 0.012], [0.5, 0, 0]);
-      return b.mesh();
+      return b.mesh(CHAR);
     case 'flag': {
       b.add(G.cyl, '#6b4428', [0, 0.25, 0], [0.014, 0.9, 0.014]);
       const g = new THREE.Group(); g.add(b.mesh());
@@ -307,6 +385,9 @@ export class Character {
     this.torso = torso(L); this.hips.add(this.torso);
     this.headPivot = new THREE.Group(); this.headPivot.position.y = 0.6 + 0.16; this.hips.add(this.headPivot);
     this.head = head(L); this.headPivot.add(this.head);
+    const lid = new Builder(); for (const sx of [-1, 1]) lid.add(G.msph, L.skin, [sx * 0.06, 0.006, 0.13], [0.048, 0.056, 0.05]);
+    this.lids = lid.mesh(CHAR, false); this.lids.visible = false; this.head.add(this.lids); this.blinkAt = 1 + Math.random() * 4;
+    this.blob = new THREE.Mesh(BLOB_G, BLOB); this.blob.position.y = 0.03; this.blob.scale.setScalar(L.age === 'child' ? 0.6 : 0.95); this.blob.renderOrder = 1; root.add(this.blob);
     if (L.age === 'child') this.head.scale.setScalar(1.25);
     const w = L.female ? 0.86 : 1;
     this.armL = new THREE.Group(); this.armL.position.set(0.215 * w, 0.46, 0); this.hips.add(this.armL); this.armL.add(arm(L, 1));
@@ -331,7 +412,7 @@ export class Character {
     arm.add(p); this[key] = p; this[key + 'Kind'] = kind;
   }
   setCuffs(on) {
-    if (!on) { this.L = { ...this.L, cuffs: false }; for (const a of [this.armL, this.armR]) { const old = a.children[0]; a.remove(old); old.geometry.dispose(); a.add(arm(this.L, a === this.armL ? 1 : -1)); if (a === this.armL && this.holdL) a.add(this.holdL); if (a === this.armR && this.holdR) a.add(this.holdR); } }
+    if (!on) { this.L = { ...this.L, cuffs: false }; for (const a of [this.armL, this.armR]) { const old = a.children[0]; a.remove(old); old.geometry.dispose(); a.add(arm(this.L, a === this.armL ? 1 : -1)); a.children.unshift(a.children.pop()); if (a === this.armL && this.holdL) a.add(this.holdL); if (a === this.armR && this.holdR) a.add(this.holdR); } }
   }
   update(dt, speed = 0) {
     this.t += dt;
@@ -377,5 +458,7 @@ export class Character {
     this.headPivot.rotation.y += (hy - this.headPivot.rotation.y) * Math.min(1, dt * 4);
     this.headPivot.rotation.x = hx;
     if (this.holdL && this.holdLKind === 'flag') this.holdL.children[1].rotation.y = Math.sin(t * 2.4) * 0.25;
+    // piscar de olhos
+    if (t > this.blinkAt) { this.lids.visible = true; if (t > this.blinkAt + 0.12) { this.lids.visible = false; this.blinkAt = t + 2.2 + Math.random() * 3.5 + (Math.random() < 0.2 ? -2 : 0); } }
   }
 }

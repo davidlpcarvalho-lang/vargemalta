@@ -48,7 +48,12 @@ export function heightAt(x, z) {
   const bed = lerp(-2.6, -1.25, ford);
   h = lerp(h, bed, 1 - ss(2.5, 9, d));
   const dp = Math.hypot(x - FALLS.x, z - FALLS.z);         // poço da cachoeira
-  if (dp < 11) h = lerp(FALLS.y - 1.6, h, ss(4.5, 11, dp));
+  if (dp < 8) h = lerp(FALLS.y - 1.6, FALLS.y + 0.4, ss(4.5, 8, dp));       // bacia
+  else if (dp < 22) h = Math.max(h, lerp(h, FALLS.y + 0.4, 1 - ss(9, 22, dp))); // margem que contém a água no lado mais baixo
+  // paredão de pedra de onde a água despenca (a oeste do poço)
+  const dx = x - FALLS.x, dz = z - FALLS.z;
+  const cliff = ss(-3, -5.5, dx) * (1 - ss(10, 17, Math.abs(dz))) * (1 - ss(32, 48, Math.hypot(dx, dz)));
+  if (cliff > 0) h = Math.max(h, lerp(h, FALLS.y + 19.5, cliff));
   return h;
 }
 
